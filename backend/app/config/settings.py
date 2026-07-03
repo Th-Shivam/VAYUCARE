@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     # Google ADK / Gemini
     GEMINI_API_KEY: str = "placeholder_gemini_key"
     GOOGLE_API_KEY: str = "placeholder_google_key"
+    GOOGLE_ADK_MODEL: str = "gemini-flash-latest"
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -50,4 +51,3 @@ if settings.GOOGLE_API_KEY and settings.GOOGLE_API_KEY != "placeholder_google_ke
     os.environ["GOOGLE_API_KEY"] = settings.GOOGLE_API_KEY
 elif settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "placeholder_gemini_key":
     os.environ["GOOGLE_API_KEY"] = settings.GEMINI_API_KEY
-
