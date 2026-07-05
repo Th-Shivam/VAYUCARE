@@ -1,3 +1,1 @@
-from app.database.session import get_db, engine
-
-__all__ = ["get_db", "engine"]
+"""Appwrite is the only persistence layer for VAYU."""

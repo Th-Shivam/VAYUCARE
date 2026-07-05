@@ -1,17 +1,205 @@
-import { useUser } from "@clerk/clerk-react";
+import { useEffect, useRef, useState } from "react";
+import { useAuth as useClerkAuth, useUser } from "@clerk/clerk-react";
 import { useAuth } from "../hooks/auth/useAuth";
+
+type DashboardData = {
+  userId: string;
+  email: string | null;
+  displayName: string;
+  appwriteSynced: boolean;
+};
+
+type Report = {
+  id: string;
+  userId: string;
+  title: string;
+  fileId: string | null;
+  fileName: string | null;
+  fileUrl: string | null;
+  status: string;
+  createdDate: string;
+};
+
+type AgentChatResponse = {
+  success: boolean;
+  agent: string;
+  reply: string;
+  timestamp: string;
+};
+
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+
+async function readErrorMessage(response: Response, fallback: string) {
+  try {
+    const payload = await response.json();
+    if (typeof payload.detail === "string") {
+      return payload.detail;
+    }
+  } catch {
+    // Keep the fallback when the backend returns a non-JSON error.
+  }
+
+  return fallback;
+}
 
 export function DashboardPage() {
   const { user } = useUser();
+  const { getToken } = useClerkAuth();
   const { logout, loading } = useAuth();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
+  const [dashboardLoading, setDashboardLoading] = useState(true);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
+  const [reports, setReports] = useState<Report[]>([]);
+  const [reportsLoading, setReportsLoading] = useState(true);
+  const [uploadingReport, setUploadingReport] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [agentLoading, setAgentLoading] = useState(false);
+  const [agentReply, setAgentReply] = useState<AgentChatResponse | null>(null);
+  const [agentError, setAgentError] = useState<string | null>(null);
 
-  const steps = [
-    { id: "01", name: "Clinical Intake", desc: "Medical records uploaded & analyzed", status: "complete" },
-    { id: "02", name: "Hospital Match", desc: "Apollo Heights, Mumbai selected", status: "complete" },
-    { id: "03", name: "Visa Processing", desc: "E-Medical Visa application submitted", status: "active" },
-    { id: "04", name: "Travel & Booking", desc: "Flight & recovery villa reservation", status: "pending" },
-    { id: "05", name: "Clinical Recovery", desc: "14-day post-op monitoring", status: "pending" },
-  ];
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadDashboard() {
+      setDashboardLoading(true);
+      setDashboardError(null);
+
+      try {
+        const token = await getToken();
+        if (!token) {
+          throw new Error("Authentication token is not available.");
+        }
+
+        const [dashboardResponse, reportsResponse] = await Promise.all([
+          fetch(`${apiBaseUrl}/api/users/dashboard`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }),
+          fetch(`${apiBaseUrl}/api/reports`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }),
+        ]);
+
+        if (!dashboardResponse.ok) {
+          throw new Error("Dashboard data could not be loaded.");
+        }
+
+        const data = (await dashboardResponse.json()) as DashboardData;
+        if (isMounted) {
+          setDashboardData(data);
+        }
+
+        if (reportsResponse.ok) {
+          const reportsData = (await reportsResponse.json()) as { reports: Report[] };
+          if (isMounted) {
+            setReports(reportsData.reports);
+          }
+        } else if (isMounted) {
+          setReportError("Reports are not available yet.");
+        }
+      } catch (error) {
+        console.error(error);
+        if (isMounted) {
+          setDashboardError("Using local dashboard preview until backend is connected.");
+        }
+      } finally {
+        if (isMounted) {
+          setDashboardLoading(false);
+          setReportsLoading(false);
+        }
+      }
+    }
+
+    loadDashboard();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [getToken]);
+
+  const uploadReport = async (file: File) => {
+    setUploadingReport(true);
+    setReportError(null);
+
+    try {
+      const token = await getToken();
+      if (!token) {
+        throw new Error("Authentication token is not available.");
+      }
+
+      const formData = new FormData();
+      formData.append("title", file.name.replace(/\.[^/.]+$/, "") || file.name);
+      formData.append("file", file);
+
+      const response = await fetch(`${apiBaseUrl}/api/reports`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, "Report upload failed."));
+      }
+
+      const report = (await response.json()) as Report;
+      setReports((currentReports) => [report, ...currentReports]);
+    } catch (error) {
+      console.error(error);
+      setReportError(error instanceof Error ? error.message : "Report upload failed.");
+    } finally {
+      setUploadingReport(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  };
+
+  const askClinicalAI = async () => {
+    setAgentLoading(true);
+    setAgentError(null);
+
+    try {
+      const token = await getToken();
+      if (!token) {
+        throw new Error("Authentication token is not available.");
+      }
+
+      const response = await fetch(`${apiBaseUrl}/api/agents/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          message: `Review the current VAYU dashboard context for ${displayName} and confirm the next safe coordination step.`,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, "Clinical AI request failed."));
+      }
+
+      const result = (await response.json()) as AgentChatResponse;
+      setAgentReply(result);
+    } catch (error) {
+      console.error(error);
+      setAgentError(error instanceof Error ? error.message : "Clinical AI is not available yet.");
+    } finally {
+      setAgentLoading(false);
+    }
+  };
+
+  const displayName = dashboardData?.displayName || user?.firstName || "Patient";
+  const email = dashboardData?.email || user?.primaryEmailAddress?.emailAddress || "patient@vayu.com";
+  const hasReports = reports.length > 0;
+  const hasInteractions = Boolean(agentReply);
+  const hasStartedJourney = hasReports || hasInteractions;
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-[var(--app-bg)] text-slate-950 selection:bg-sky-500/15">
@@ -32,10 +220,10 @@ export function DashboardPage() {
             <div className="hidden items-center gap-3 text-right sm:flex">
               <div>
                 <p className="text-sm font-semibold text-slate-900">
-                  {user?.firstName ? `${user.firstName} ${user.lastName || ""}` : "Patient Portal"}
+                  {displayName}
                 </p>
                 <p className="text-xs text-slate-500">
-                  {user?.primaryEmailAddress?.emailAddress || "patient@vayu.com"}
+                  {email}
                 </p>
               </div>
             </div>
@@ -62,173 +250,175 @@ export function DashboardPage() {
         <div className="mb-10 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
-              Hello, {user?.firstName || "Patient"}.
+              Hello, {displayName.split(" ")[0] || "Patient"}.
             </h1>
             <p className="mt-1 text-slate-600">
-              Track your active medical journey and clinical coordination.
+              {hasStartedJourney
+                ? "Review your records and recent VAYU interactions."
+                : "Start your healing journey with VAYU today."}
             </p>
+            {dashboardError && (
+              <p className="mt-2 text-xs font-medium text-amber-700">{dashboardError}</p>
+            )}
           </div>
           <div className="inline-flex items-center gap-3 rounded-2xl border border-white/80 bg-white/40 p-3 shadow-sm backdrop-blur-md">
-            <span className="h-3.5 w-3.5 rounded-full bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.5)]" />
+            <span className={`h-3.5 w-3.5 rounded-full ${dashboardLoading ? "bg-sky-500" : dashboardData?.appwriteSynced ? "bg-emerald-500" : "bg-amber-500"} shadow-[0_0_12px_rgba(16,185,129,0.5)]`} />
             <span className="text-xs font-semibold text-slate-700">
-              AI Concierge Service: Active
+              {dashboardLoading ? "Loading Care Portal" : dashboardData?.appwriteSynced ? "Appwrite Sync: Active" : "Care Portal: Preview"}
             </span>
           </div>
         </div>
 
-        {/* Top Grid: Journey Summary & Specialist Card */}
-        <div className="grid gap-6 lg:grid-cols-3">
-          {/* Active Case Details */}
-          <section className="glass-panel p-6 sm:p-7 lg:col-span-2">
-            <div className="flex flex-col justify-between h-full gap-6">
-              <div>
-                <span className="text-[10px] font-semibold uppercase tracking-[0.24em] text-sky-600">
-                  Active Treatment File
-                </span>
-                <h2 className="mt-2 text-xl font-semibold tracking-tight text-slate-950 sm:text-2xl">
-                  Orthopedics: Complex Knee Assessment
-                </h2>
-                <p className="mt-2 text-sm text-slate-600">
-                  Patient file successfully synced with Apollo Heights, Mumbai. Special clinical protocols applied for recovery.
-                </p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4 border-y border-slate-200 py-4 sm:grid-cols-4">
-                <div>
-                  <p className="text-[9px] font-semibold uppercase tracking-wider text-slate-500">Destination</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-950">Mumbai, India</p>
-                </div>
-                <div>
-                  <p className="text-[9px] font-semibold uppercase tracking-wider text-slate-500">Est. Travel Date</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-950">July 18, 2026</p>
-                </div>
-                <div>
-                  <p className="text-[9px] font-semibold uppercase tracking-wider text-slate-500">Success Rate</p>
-                  <p className="mt-1 text-sm font-semibold text-emerald-600">99.2% (AI Est.)</p>
-                </div>
-                <div>
-                  <p className="text-[9px] font-semibold uppercase tracking-wider text-slate-500">Recovery Period</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-950">14 Days</p>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-3">
-                <button className="inline-flex items-center gap-2 rounded-full bg-sky-600 px-5 py-2.5 text-xs font-semibold text-white shadow-md transition hover:bg-sky-700">
-                  <span className="material-symbols-outlined text-[16px]">chat</span>
-                  Consult Clinical AI
-                </button>
-                <button className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-5 py-2.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50">
-                  <span className="material-symbols-outlined text-[16px]">upload_file</span>
-                  Upload Records
-                </button>
-              </div>
-            </div>
-          </section>
-
-          {/* Assigned Specialist & Hospital */}
-          <section className="glass-panel p-6 sm:p-7">
-            <div className="flex flex-col justify-between h-full gap-6">
-              <div>
-                <span className="text-[10px] font-semibold uppercase tracking-[0.24em] text-emerald-600">
-                  Assigned Specialist
-                </span>
-                <div className="mt-4 flex items-center gap-4">
-                  <div className="h-14 w-14 rounded-full bg-gradient-to-tr from-sky-500 to-emerald-400 p-0.5 shadow-sm">
-                    <div className="flex h-full w-full items-center justify-center rounded-full bg-white font-bold text-slate-700">
-                      DS
-                    </div>
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-slate-950">Dr. Devendra Sharma</h3>
-                    <p className="text-xs text-slate-500">Chief Joint Replacement Surgeon</p>
-                    <p className="text-[10px] font-semibold text-emerald-600">22+ Years Experience</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-100 bg-slate-50/50 p-4">
-                <div className="flex gap-3">
-                  <span className="material-symbols-outlined text-[20px] text-sky-600">corporate_fare</span>
-                  <div>
-                    <p className="text-xs font-semibold text-slate-950">Apollo Heights</p>
-                    <p className="text-[11px] text-slate-500">JCI & NABH Accredited Center, Mumbai</p>
-                  </div>
-                </div>
-              </div>
-
-              <button className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-slate-200 bg-white py-2.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50">
-                <span className="material-symbols-outlined text-[16px]">videocam</span>
-                Schedule Video Call
+        {!hasStartedJourney && !reportsLoading && (
+          <section className="glass-panel p-8 text-center sm:p-12">
+            <span className="material-symbols-outlined text-5xl text-sky-600">air</span>
+            <h2 className="mt-4 text-2xl font-semibold tracking-tight text-slate-950">
+              Start your healing journey with VAYU today.
+            </h2>
+            <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-slate-600">
+              Upload your first medical record or start a clinical coordination chat when you are ready.
+            </p>
+            <div className="mt-6 flex flex-wrap justify-center gap-3">
+              <button
+                type="button"
+                onClick={askClinicalAI}
+                disabled={agentLoading}
+                className="inline-flex items-center gap-2 rounded-full bg-sky-600 px-5 py-2.5 text-xs font-semibold text-white shadow-md transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <span className="material-symbols-outlined text-[16px]">chat</span>
+                {agentLoading ? "Starting..." : "Start Clinical Chat"}
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) {
+                    uploadReport(file);
+                  }
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadingReport}
+                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-5 py-2.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <span className="material-symbols-outlined text-[16px]">upload_file</span>
+                {uploadingReport ? "Uploading..." : "Upload First Record"}
               </button>
             </div>
+            {(agentError || reportError) && (
+              <div className="mx-auto mt-5 max-w-2xl rounded-2xl border border-slate-200 bg-white/70 p-4 text-xs">
+                {agentError && <p className="text-rose-600">{agentError}</p>}
+                {reportError && <p className="text-amber-700">{reportError}</p>}
+              </div>
+            )}
           </section>
-        </div>
+        )}
 
-        {/* Bottom Section: Clinical Journey Tracker */}
-        <div className="mt-8">
-          <h2 className="mb-6 text-lg font-semibold tracking-tight text-slate-950">
-            Your VAYU Clinical Journey
-          </h2>
-
-          <div className="grid gap-6 lg:grid-cols-5">
-            {steps.map((step) => {
-              const isComplete = step.status === "complete";
-              const isActive = step.status === "active";
-
-              return (
-                <div
-                  key={step.id}
-                  className={`glass-panel relative p-5 transition duration-300 ${
-                    isActive ? "border-sky-500/40 bg-white/90 shadow-md ring-1 ring-sky-500/15" : "opacity-85"
-                  }`}
+        {hasStartedJourney && (
+          <section className="glass-panel p-6 sm:p-7">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <span className="text-[10px] font-semibold uppercase tracking-[0.24em] text-sky-600">
+                  Current Activity
+                </span>
+                <h2 className="mt-2 text-xl font-semibold tracking-tight text-slate-950 sm:text-2xl">
+                  Your VAYU workspace is active
+                </h2>
+                <p className="mt-2 text-sm text-slate-600">
+                  Your dashboard shows only records and interactions created from your account.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={askClinicalAI}
+                  disabled={agentLoading}
+                  className="inline-flex items-center gap-2 rounded-full bg-sky-600 px-5 py-2.5 text-xs font-semibold text-white shadow-md transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {/* Status Indicator Bar */}
-                  <div
-                    className={`absolute inset-x-0 top-0 h-1 rounded-t-[24px] ${
-                      isComplete ? "bg-emerald-500" : isActive ? "bg-sky-500 animate-pulse" : "bg-slate-200"
-                    }`}
-                  />
+                  <span className="material-symbols-outlined text-[16px]">chat</span>
+                  {agentLoading ? "Consulting AI..." : "Consult Clinical AI"}
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) {
+                      uploadReport(file);
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploadingReport}
+                  className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-5 py-2.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <span className="material-symbols-outlined text-[16px]">upload_file</span>
+                  {uploadingReport ? "Uploading..." : "Upload Records"}
+                </button>
+              </div>
+            </div>
+            {(agentReply || agentError || reportError) && (
+              <div className="mt-5 rounded-2xl border border-slate-200 bg-white/70 p-4 text-xs text-slate-700">
+                {agentReply && (
+                  <p>
+                    <span className="font-semibold text-sky-700">{agentReply.agent}:</span> {agentReply.reply}
+                  </p>
+                )}
+                {agentError && <p className="text-rose-600">{agentError}</p>}
+                {reportError && <p className="mt-1 text-amber-700">{reportError}</p>}
+              </div>
+            )}
+          </section>
+        )}
 
-                  <div className="flex items-start justify-between gap-4">
-                    <span
-                      className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold ${
-                        isComplete
-                          ? "bg-emerald-100 text-emerald-700"
-                          : isActive
-                          ? "bg-sky-100 text-sky-700"
-                          : "bg-slate-100 text-slate-500"
-                      }`}
-                    >
-                      {isComplete ? (
-                        <span className="material-symbols-outlined text-[14px]">check</span>
-                      ) : (
-                        step.id
-                      )}
-                    </span>
-
-                    {isActive && (
-                      <span className="rounded-full bg-sky-500/10 px-2 py-0.5 text-[9px] font-semibold text-sky-700">
-                        In Progress
-                      </span>
-                    )}
-                  </div>
-
-                  <h3 className="mt-4 font-semibold text-slate-950">{step.name}</h3>
-                  <p className="mt-1 text-[11px] leading-relaxed text-slate-600">{step.desc}</p>
-
-                  {isActive && (
-                    <div className="mt-4 rounded-xl bg-sky-50 px-3 py-2 text-[10px] font-medium text-sky-700">
-                      <div className="flex items-center gap-1.5">
-                        <span className="material-symbols-outlined text-xs animate-spin">sync</span>
-                        <span>Waiting for Consulate approval</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+        <section className="mt-8 glass-panel p-6 sm:p-7">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold tracking-tight text-slate-950">Uploaded Medical Records</h2>
+              <p className="mt-1 text-sm text-slate-600">Records are scoped to your signed-in account.</p>
+            </div>
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+              {reportsLoading ? "Syncing" : `${reports.length} files`}
+            </span>
           </div>
-        </div>
+
+          <div className="mt-5 grid gap-3">
+            {reportsLoading ? (
+              <div className="rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 text-sm text-slate-500">
+                Loading records...
+              </div>
+            ) : reports.length > 0 ? (
+              reports.map((report) => (
+                <a
+                  key={report.id}
+                  href={report.fileUrl || undefined}
+                  target={report.fileUrl ? "_blank" : undefined}
+                  rel="noreferrer"
+                  className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 text-sm transition hover:border-sky-200 hover:bg-sky-50/40 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <span className="font-semibold text-slate-900">{report.title}</span>
+                  <span className="text-xs font-medium text-slate-500">
+                    {report.status} {report.fileName ? `- ${report.fileName}` : ""}
+                  </span>
+                </a>
+              ))
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-white/50 px-4 py-5 text-sm text-slate-500">
+                No records uploaded yet.
+              </div>
+            )}
+          </div>
+        </section>
+
       </main>
     </div>
   );

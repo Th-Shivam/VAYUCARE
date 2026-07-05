@@ -1,4 +1,12 @@
-from app.schemas.user import UserSessionResponse, UserSessionDetail
+from app.schemas.user import UserDashboardResponse, UserSessionResponse, UserSessionDetail
 from app.schemas.health import HealthResponse
+from app.schemas.reports import ReportListResponse, ReportResponse
 
-__all__ = ["UserSessionResponse", "UserSessionDetail", "HealthResponse"]
+__all__ = [
+    "UserDashboardResponse",
+    "UserSessionResponse",
+    "UserSessionDetail",
+    "HealthResponse",
+    "ReportListResponse",
+    "ReportResponse",
+]

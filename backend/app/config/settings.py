@@ -23,13 +23,17 @@ class Settings(BaseSettings):
     # Clerk Authentication
     CLERK_JWKS_URL: str = "https://api.clerk.com/v1/jwks"
 
-    # Database
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/vayu"
-
     # Appwrite
     APPWRITE_ENDPOINT: str = "https://cloud.appwrite.io/v1"
     APPWRITE_PROJECT_ID: str = "placeholder_project_id"
     APPWRITE_API_KEY: str = "placeholder_api_key"
+    APPWRITE_DATABASE_ID: str = "placeholder_database_id"
+    APPWRITE_USERS_COLLECTION_ID: str = "users"
+    APPWRITE_REPORTS_COLLECTION_ID: str = "reports"
+    APPWRITE_HOSPITALS_COLLECTION_ID: str = "hospitals"
+    APPWRITE_APPOINTMENTS_COLLECTION_ID: str = "appointments"
+    APPWRITE_ANALYSES_COLLECTION_ID: str = "analyses"
+    APPWRITE_REPORTS_BUCKET_ID: str = ""
 
     # Google ADK / Gemini
     GEMINI_API_KEY: str = "placeholder_gemini_key"
